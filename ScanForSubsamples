@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+ROOT="${1:-.}"
+INTERVAL=50
+
+declare -A codec_count
+declare -A pixfmt_count
+declare -A combo_count
+
+total_files=0
+total_valid=0
+total_errors=0
+
+print_summary() {
+    echo
+    echo "===== SUMMARY ====="
+    echo "Total files found : $total_files"
+    echo "Valid video files : $total_valid"
+    echo "Files w/ errors   : $total_errors"
+
+    echo
+    echo "-- Codecs --"
+    for k in "${!codec_count[@]}"; do
+        printf "%6d %s\n" "${codec_count[$k]}" "$k"
+    done | sort -nr
+
+    echo
+    echo "-- Pixel formats (chroma / bit depth) --"
+    for k in "${!pixfmt_count[@]}"; do
+        printf "%6d %s\n" "${pixfmt_count[$k]}" "$k"
+    done | sort -nr
+
+    echo
+    echo "-- Codec + pixel format --"
+    for k in "${!combo_count[@]}"; do
+        printf "%6d %s\n" "${combo_count[$k]}" "$k"
+    done | sort -nr
+
+    echo "===================="
+    echo
+}
+
+while IFS= read -r -d '' file; do
+    ((total_files++))
+
+    result=$(ffprobe -v error -select_streams v:0 \
+        -show_entries stream=codec_name,pix_fmt \
+        -of csv=p=0 "$file" 2>/dev/null)
+
+    # Invalid or unreadable media
+    if [[ -z "$result" || "$result" != *,* ]]; then
+        ((total_errors++))
+        echo
+        echo "[Error ] $file"
+        continue
+    fi
+
+    codec=$(cut -d',' -f1 <<< "$result")
+    pixfmt=$(cut -d',' -f2 <<< "$result")
+
+    # Invalid codec info
+    if [[ -z "$codec" ]]; then
+        ((total_errors++))
+
+        echo
+        echo "[Error ] $file"
+        continue
+    fi
+
+    # Missing pix_fmt (still count as valid)
+    if [[ -z "$pixfmt" ]]; then
+        pixfmt="unknown_pixfmt"
+        echo
+        echo "[Issue no pixfmt] $file"
+    fi
+
+    ((codec_count["$codec"]++))
+    ((pixfmt_count["$pixfmt"]++))
+    ((combo_count["$codec | $pixfmt"]++))
+    ((total_valid++))
+
+    printf "\rScanned: %d files" "$total_files"
+
+    if (( total_files % INTERVAL == 0 )); then
+        print_summary
+    fi
+done < <(
+    find "$ROOT" -type f \( \
+        -iname '*.mkv' -o -iname '*.mp4' -o -iname '*.avi' -o -iname '*.mov' \
+    \) -print0
+)
+
+echo
+echo "######## FINAL SUMMARY ########"
+print_summary
